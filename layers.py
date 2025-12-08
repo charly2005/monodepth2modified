@@ -168,6 +168,41 @@ class BackprojectDepth(nn.Module):
         return cam_points
 
 
+class Restaticize(nn.Module):
+    """Layer which applies a 2D flow onto an image.
+    """
+    
+    def __init__(self, batch_size, height, width):
+        super(Restaticize, self).__init__()
+
+        self.batch_size = batch_size
+        self.height = height
+        self.width = width
+        
+        meshgrid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
+
+        self.id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
+        self.id_coords = nn.Parameter(torch.from_numpy(self.id_coords),
+                                      requires_grad=False)
+
+        self.pix_coords = self.id_coords.unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        self.pix_coords = nn.Parameter(self.pix_coords, requires_grad=False)
+
+    
+    def forward(self, images, flow):
+        
+        coords = self.pix_coords + flow
+
+        # normalize
+        coords[:, 0, :, :] = 2.0 * coords[:, 0, :, :] / (self.width - 1) - 1.0
+        coords[:, 1, :, :] = 2.0 * coords[:, 1, :, :] / (self.height - 1) - 1.0
+
+        coords = coords.permute(0, 2, 3, 1)
+
+        warped_image = F.grid_sample(images, coords, mode='bilinear', padding_mode='border', align_corners=True)
+
+        return warped_image
+
 class Project3D(nn.Module):
     """Layer which projects 3D points into a camera with intrinsics K and at position T
     """
@@ -192,12 +227,25 @@ class Project3D(nn.Module):
         pix_coords = (pix_coords - 0.5) * 2
         return pix_coords
 
-
 def upsample(x):
     """Upsample input tensor by a factor of 2
     """
     return F.interpolate(x, scale_factor=2, mode="nearest")
 
+def get_flow_smooth_loss(flow, img):
+    """Computes the smoothness loss for flow
+    The color image is used for edge-aware smoothness
+    """
+    grad_disp_x = torch.abs(flow[:, :, :, :-1] - flow[:, :, :, 1:])
+    grad_disp_y = torch.abs(flow[:, :, :-1, :] - flow[:, :, 1:, :])
+
+    grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+    grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+
+    grad_disp_x *= torch.exp(-grad_img_x)
+    grad_disp_y *= torch.exp(-grad_img_y)
+
+    return grad_disp_x.mean() + grad_disp_y.mean()
 
 def get_smooth_loss(disp, img):
     """Computes the smoothness loss for a disparity image
