@@ -61,7 +61,10 @@ class FlowDecoder(nn.Module):
                 mask = self.relu(mask)
                 flow = self.relu(flow)
 
-        mask = self.sigmoid(mask)
+        soft_mask = self.sigmoid(mask)
+
+        hard_mask = (mask > 0.5).float()
+        mask = hard_mask.detatch() - soft_mask.detach() + soft_mask
 
         mask = mask.repeat_interleave(2, dim=1)
 
