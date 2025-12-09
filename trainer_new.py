@@ -183,8 +183,6 @@ class NewTrainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        self.model_lr_scheduler.step()
-
         print("Training")
         self.set_train()
 
@@ -214,6 +212,8 @@ class NewTrainer:
                 self.val()
 
             self.step += 1
+        self.model_lr_scheduler.step()
+
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
@@ -269,10 +269,10 @@ class NewTrainer:
         """
         self.set_eval()
         try:
-            inputs = self.val_iter.next()
+            inputs = next(self.val_iter)
         except StopIteration:
             self.val_iter = iter(self.val_loader)
-            inputs = self.val_iter.next()
+            inputs = next(self.val_iter)
 
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
@@ -320,7 +320,8 @@ class NewTrainer:
                 warped_color = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],
-                    padding_mode="border")
+                    padding_mode="border",
+                    align_corners = True)
                 
                 outputs[("color_warped", frame_id, scale)] = warped_color
 
@@ -364,6 +365,48 @@ class NewTrainer:
             reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
 
         return reprojection_loss
+
+    def log_time(self, batch_idx, duration, loss):
+        """Print a logging statement to the terminal
+        """
+        samples_per_sec = self.opt.batch_size / duration
+        time_sofar = time.time() - self.start_time
+        training_time_left = (
+            self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
+        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
+            " | loss: {:.5f} | time elapsed: {} | time left: {}"
+        print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
+                                  sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+
+    def compute_depth_losses(self, inputs, outputs, losses):
+        """Compute depth metrics, to allow monitoring during training
+
+        This isn't particularly accurate as it averages over the entire batch,
+        so is only used to give an indication of validation performance
+        """
+        depth_pred = outputs[("depth", 0, 0)]
+        depth_pred = torch.clamp(F.interpolate(
+            depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
+        depth_pred = depth_pred.detach()
+
+        depth_gt = inputs["depth_gt"]
+        mask = depth_gt > 0
+
+        # garg/eigen crop
+        crop_mask = torch.zeros_like(mask)
+        crop_mask[:, :, 153:371, 44:1197] = 1
+        mask = mask * crop_mask
+
+        depth_gt = depth_gt[mask]
+        depth_pred = depth_pred[mask]
+        depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
+
+        depth_pred = torch.clamp(depth_pred, min=1e-3, max=80)
+
+        depth_errors = compute_depth_errors(depth_gt, depth_pred)
+
+        for i, metric in enumerate(self.depth_metric_names):
+            losses[metric] = np.array(depth_errors[i].cpu())
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
@@ -455,3 +498,95 @@ class NewTrainer:
         total_loss /= self.num_scales
         losses["loss"] = total_loss
         return losses
+    
+    def log(self, mode, inputs, outputs, losses):
+        """Write an event to the tensorboard events file
+        """
+        writer = self.writers[mode]
+        for l, v in losses.items():
+            writer.add_scalar("{}".format(l), v, self.step)
+
+        for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
+            for s in self.opt.scales:
+                for frame_id in self.opt.frame_ids:
+                    writer.add_image(
+                        "color_{}_{}/{}".format(frame_id, s, j),
+                        inputs[("color", frame_id, s)][j].data, self.step)
+                    if s == 0 and frame_id != 0:
+                        writer.add_image(
+                            "color_pred_{}_{}/{}".format(frame_id, s, j),
+                            outputs[("color", frame_id, s)][j].data, self.step)
+
+                writer.add_image(
+                    "disp_{}/{}".format(s, j),
+                    normalize_image(outputs[("disp", s)][j]), self.step)
+
+                if self.opt.predictive_mask:
+                    for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
+                        writer.add_image(
+                            "predictive_mask_{}_{}/{}".format(frame_id, s, j),
+                            outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
+                            self.step)
+
+                elif not self.opt.disable_automasking:
+                    writer.add_image(
+                        "automask_{}/{}".format(s, j),
+                        outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
+
+    def save_opts(self):
+        """Save options to disk so we know what we ran this experiment with
+        """
+        models_dir = os.path.join(self.log_path, "models")
+        if not os.path.exists(models_dir):
+            os.makedirs(models_dir)
+        to_save = self.opt.__dict__.copy()
+
+        with open(os.path.join(models_dir, 'opt.json'), 'w') as f:
+            json.dump(to_save, f, indent=2)
+
+    def save_model(self):
+        """Save model weights to disk
+        """
+        save_folder = os.path.join(self.log_path, "models", "weights_{}".format(self.epoch))
+        if not os.path.exists(save_folder):
+            os.makedirs(save_folder)
+
+        for model_name, model in self.models.items():
+            save_path = os.path.join(save_folder, "{}.pth".format(model_name))
+            to_save = model.state_dict()
+            if model_name == 'encoder':
+                # save the sizes - these are needed at prediction time
+                to_save['height'] = self.opt.height
+                to_save['width'] = self.opt.width
+                to_save['use_stereo'] = self.opt.use_stereo
+            torch.save(to_save, save_path)
+
+        save_path = os.path.join(save_folder, "{}.pth".format("adam"))
+        torch.save(self.model_optimizer.state_dict(), save_path)
+
+    def load_model(self):
+        """Load model(s) from disk
+        """
+        self.opt.load_weights_folder = os.path.expanduser(self.opt.load_weights_folder)
+
+        assert os.path.isdir(self.opt.load_weights_folder), \
+            "Cannot find folder {}".format(self.opt.load_weights_folder)
+        print("loading model from folder {}".format(self.opt.load_weights_folder))
+
+        for n in self.opt.models_to_load:
+            print("Loading {} weights...".format(n))
+            path = os.path.join(self.opt.load_weights_folder, "{}.pth".format(n))
+            model_dict = self.models[n].state_dict()
+            pretrained_dict = torch.load(path)
+            pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+            model_dict.update(pretrained_dict)
+            self.models[n].load_state_dict(model_dict)
+
+        # loading adam state
+        optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam.pth")
+        if os.path.isfile(optimizer_load_path):
+            print("Loading Adam weights")
+            optimizer_dict = torch.load(optimizer_load_path)
+            self.model_optimizer.load_state_dict(optimizer_dict)
+        else:
+            print("Cannot find Adam weights so Adam is randomly initialized")

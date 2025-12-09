@@ -8,7 +8,10 @@ from __future__ import absolute_import, division, print_function
 
 from trainer_new import NewTrainer
 from options import MonodepthOptions
+import torch
 
+torch.backends.cudnn.enabled = False
+torch.backends.cudnn.benchmark = False
 options = MonodepthOptions()
 opts = options.parse()
 

@@ -15,6 +15,7 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
+import torchvision.transforms.functional as F
 
 
 def pil_loader(path):
@@ -66,18 +67,14 @@ class MonoDataset(data.Dataset):
 
         # We need to specify augmentations differently in newer versions of torchvision.
         # We first try the newer tuple version; if this fails we fall back to scalars
-        try:
-            self.brightness = (0.8, 1.2)
-            self.contrast = (0.8, 1.2)
-            self.saturation = (0.8, 1.2)
-            self.hue = (-0.1, 0.1)
-            transforms.ColorJitter.get_params(
-                self.brightness, self.contrast, self.saturation, self.hue)
-        except TypeError:
-            self.brightness = 0.2
-            self.contrast = 0.2
-            self.saturation = 0.2
-            self.hue = 0.1
+        
+        self.brightness = (0.8, 1.2)
+        self.contrast = (0.8, 1.2)
+        self.saturation = (0.8, 1.2)
+        self.hue = (-0.1, 0.1)
+        self.color_jitter = transforms.ColorJitter(
+            self.brightness, self.contrast, self.saturation, self.hue)
+
 
         self.resize = {}
         for i in range(self.num_scales):
@@ -107,6 +104,17 @@ class MonoDataset(data.Dataset):
                 n, im, i = k
                 inputs[(n, im, i)] = self.to_tensor(f)
                 inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))
+
+    def apply_consistent_jitter(self, img, fn_idx, brightness, contrast, saturation, hue):
+        transforms_dict = [
+            lambda i: F.adjust_brightness(i, brightness),
+            lambda i: F.adjust_contrast(i, contrast),
+            lambda i: F.adjust_saturation(i, saturation),
+            lambda i: F.adjust_hue(i, hue)
+        ]
+        for idx in fn_idx:
+            img = transforms_dict[idx](img)
+        return img
 
     def __len__(self):
         return len(self.filenames)
@@ -173,8 +181,14 @@ class MonoDataset(data.Dataset):
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
         if do_color_aug:
-            color_aug = transforms.ColorJitter.get_params(
-                self.brightness, self.contrast, self.saturation, self.hue)
+            fn_idx, brightness, contrast, saturation, hue = transforms.ColorJitter.get_params(
+                self.color_jitter.brightness, 
+                self.color_jitter.contrast, 
+                self.color_jitter.saturation, 
+                self.color_jitter.hue
+            )
+            color_aug = lambda img: self.apply_consistent_jitter(
+                img, fn_idx, brightness, contrast, saturation, hue)
         else:
             color_aug = (lambda x: x)
 

@@ -24,7 +24,7 @@ class MonodepthOptions:
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp"))
+                                 default= "/projectnb/cs523aw/students/cyao030/tmp")
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -125,7 +125,7 @@ class MonodepthOptions:
         self.parser.add_argument("--pose_model_input",
                                  type=str,
                                  help="how many images the pose network gets",
-                                 default="pairs",
+                                 default="all",
                                  choices=["pairs", "all"])
         self.parser.add_argument("--pose_model_type",
                                  type=str,
@@ -140,7 +140,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
-                                 default=12)
+                                 default=4)
 
         # LOADING options
         self.parser.add_argument("--load_weights_folder",
