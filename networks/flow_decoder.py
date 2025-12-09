@@ -13,64 +13,72 @@ from layers import *
 
 class FlowDecoder(nn.Module):
 
-    def __init__(self,
-                 num_ch_enc,
-                 num_input_features,
-                 num_frames_to_predict_for = None,
-                 stride = 1
-                 ):
+    def __init__(self, num_ch_enc, scales=range(4), num_frames_to_predict_for = None, use_skips=True):
         super(FlowDecoder, self).__init__()
 
-        self.num_ch_enc = num_ch_enc
-        self.num_input_features = num_input_features
-
-        if num_frames_to_predict_for is None:
-            num_frames_to_predict_for = num_input_features - 1
         self.num_frames_to_predict_for = num_frames_to_predict_for
-        # num_frames_to_predict_for is output not input
+        self.use_skips = use_skips
+        self.upsample_mode = 'nearest'
+        self.scales = scales
 
+        self.num_ch_enc = num_ch_enc
+        self.num_ch_dec = np.array([16, 32, 64, 128, 256])
+
+        # decoder
         self.convs = OrderedDict()
-        self.convs[("squeeze")] = nn.Conv2d(self.num_ch_enc[-1], 256, 1)
-        self.convs[("mask", 0)] = nn.Conv2d(num_input_features * 256, 256, 3, stride, 1)
-        self.convs[("mask", 1)] = nn.Conv2d(256, 256, 3, stride, 1)
-        self.convs[("mask", 2)] = nn.Conv2d(256, num_frames_to_predict_for, 1) 
+        for i in range(4, -1, -1):
+            # upconv_0
+            num_ch_in = self.num_ch_enc[-1] if i == 4 else self.num_ch_dec[i + 1]
+            num_ch_out = self.num_ch_dec[i]
+            self.convs[("upconv", i, 0)] = ConvBlock(num_ch_in, num_ch_out)
 
-        self.convs[("flow", 0)] = nn.Conv2d(num_input_features * 256, 256, 3, stride, 1)
-        self.convs[("flow", 1)] = nn.Conv2d(256, 256, 3, stride, 1)
-        self.convs[("flow", 2)] = nn.Conv2d(256, 2 * num_frames_to_predict_for, 1) 
+            # upconv_1
+            num_ch_in = self.num_ch_dec[i]
+            if self.use_skips and i > 0:
+                num_ch_in += self.num_ch_enc[i - 1]
+            num_ch_out = self.num_ch_dec[i]
+            self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 
-        self.net = nn.ModuleList(list(self.convs.values()))
-        self.relu = nn.ReLU(True)
+        for s in self.scales:
+            self.convs[("maskconv",s)] = Conv3x3(self.num_ch_dec[s], self.num_frames_to_predict_for) # bin mask
+            self.convs[("flowconv", s)] = Conv3x3(self.num_ch_dec[s], 2 * self.num_frames_to_predict_for)
+
+        self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
-
     
     def forward(self, input_features):
-        last_features = [f[-1] for f in input_features]
+      
+        self.outputs = {}
 
-        cat_features = [self.relu(self.convs["squeeze"](f)) for f in last_features]
-        cat_features = torch.cat(cat_features, 1)
+        # decoder
+        x = input_features[-1]
+        for i in range(4, -1, -1):
+            x = self.convs[("upconv", i, 0)](x)
+            x = [upsample(x)]
+            if self.use_skips and i > 0:
+                x += [input_features[i - 1]]
+            x = torch.cat(x, 1)
+            x = self.convs[("upconv", i, 1)](x)
+            if i in self.scales:
+                batch_size, _, h, w = x.shape
+                
+                soft_mask = self.convs[("maskconv", i)](x)
+                soft_mask = self.sigmoid(soft_mask)
+                hard_mask = (soft_mask > 0.5).float()
+                mask = hard_mask.detach() - soft_mask.detach() + soft_mask
+                mask = mask.view(batch_size, self.num_frames_to_predict_for, 1, h, w)
 
-        flow = cat_features
-        mask = cat_features
-        # for mask
+                flow = self.convs[("flowconv", i)](x)
+                flow = flow.view(batch_size, self.num_frames_to_predict_for, 2, h, w)
+                
+                mask_expanded = mask.expand(-1, -1, 2, -1, -1)
+                masked_flow = flow * mask_expanded
+                
+                # (batch_size, num_frames, 2, h, w)
+                # outpust[("flow",scale)][:,i]
+                self.outputs[("flow", i)] = masked_flow
+                self.outputs[("mask", i)] = mask
 
-        for i in range(3):
-            mask = self.convs[("mask"), i](mask)
-            flow = self.convs(["flow"], i)(flow)
-            if i != 2:
-                mask = self.relu(mask)
-                flow = self.relu(flow)
-
-        soft_mask = self.sigmoid(mask)
-
-        hard_mask = (mask > 0.5).float()
-        mask = hard_mask.detatch() - soft_mask.detach() + soft_mask
-
-        mask = mask.repeat_interleave(2, dim=1)
-
-        flow = flow * mask
-
-        return flow, mask
-
+        return self.outputs
 
 
