@@ -2,3 +2,5 @@ scikit-image
 IPython
 tensorboardX
 six
+matplotlib
+opencv-python-headless
