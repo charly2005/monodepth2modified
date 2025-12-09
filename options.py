@@ -20,7 +20,7 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "kitti_data"))
+                                 default= "/projectnb/cs523aw/projects/kittidataset/kitti_data")
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
@@ -95,7 +95,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=1)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
@@ -156,7 +156,7 @@ class MonodepthOptions:
         self.parser.add_argument("--log_frequency",
                                  type=int,
                                  help="number of batches between each tensorboard log",
-                                 default=250)
+                                 default=10)
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",

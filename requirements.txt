@@ -1,0 +1,7 @@
+torch
+torchvision
+numpy
+tensorboardX
+six
+scikit-image
+IPython

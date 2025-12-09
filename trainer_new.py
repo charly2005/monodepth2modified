@@ -53,7 +53,7 @@ class NewTrainer:
             self.models["encoder"].num_ch_enc, self.num_pose_frames, self.num_pose_frames)
 
         self.models["flow"] = networks.FlowDecoder(
-            self.models["encoder"].num_ch_enc, self.num_pose_frames, self.num_pose_frames)
+            self.models["encoder"].num_ch_enc, self.opt.scales, self.num_pose_frames, self.num_pose_frames)
 
         self.models["pose"].to(self.device)
         self.parameters_to_train += list(self.models["pose"].parameters())
@@ -145,6 +145,17 @@ class NewTrainer:
 
         self.save_opts()
         
+    
+    def save_opts(self):
+        """Save options to disk so we know what we ran this experiment with
+        """
+        models_dir = os.path.join(self.log_path, "models")
+        if not os.path.exists(models_dir):
+            os.makedirs(models_dir)
+        to_save = self.opt.__dict__.copy()
+
+        with open(os.path.join(models_dir, 'opt.json'), 'w') as f:
+            json.dump(to_save, f, indent=2)
 
     def set_train(self):
         """Convert all models to training mode
