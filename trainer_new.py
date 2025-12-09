@@ -36,7 +36,7 @@ class NewTrainer:
         
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
-        self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
+        self.num_pose_frames = self.num_input_frames
 
         # depth
         self.models["encoder"] = networks.ResnetEncoder(
@@ -243,38 +243,35 @@ class NewTrainer:
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
-        # Encode all frames through the shared encoder
-        all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
-        all_features = self.models["encoder"](all_color_aug)
-        all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
+        depth_features = self.models["encoder"](inputs["color_aug",0,0])
+        outputs = self.models["depth"](depth_features)
 
-        # Store features per frame_id
-        features = {}
-        for i, k in enumerate(self.opt.frame_ids):
-            features[k] = [f[i] for f in all_features]
-
-        # Decode depth from target frame (frame_id 0)
-        outputs = self.models["depth"](features[0])
-
-        # Decode flow from target frame features
-        flow_outputs = self.models["flow"](features[0])
-        outputs.update(flow_outputs)
-
-        # Predict poses using features from all frames
-        outputs.update(self.predict_poses(features))
+        outputs.update(self.predict_poses(inputs))
+        outputs.update(self.predict_flows(inputs))
 
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
 
         return outputs, losses
 
-    def predict_poses(self, features):
-        """Predict poses between input frames using shared encoder features.
-        """
-        outputs = {}
+    def predict_flows(self, inputs):
         
-        # Input all frames to the pose net together
-        pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
+        flow_inputs = torch.cat(
+                    [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
+
+        flow_inputs = [self.models["flow_encoder"](flow_inputs)]
+
+        outputs = self.models["flow"](flow_inputs)
+        return outputs
+
+    def predict_poses(self, inputs):
+
+        outputs = {}
+        pose_inputs = torch.cat(
+                    [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
+
+        pose_inputs = [self.models["pose_encoder"](pose_inputs)]
+        
         axisangle, translation = self.models["pose"](pose_inputs)
 
         for i, f_i in enumerate(self.opt.frame_ids[1:]):
@@ -348,9 +345,6 @@ class NewTrainer:
                 outputs[("color_warped", frame_id, scale)] = warped_color
 
                 # Apply flow-based restaticization for dynamic objects
-                # Get flow and mask for this source frame (PoseDecoder-style indexing)
-                # Flow shape: (B, num_frames, 2, H, W) -> select [:, i] -> (B, 2, H, W)
-                # Mask shape: (B, num_frames, 1, H, W) -> select [:, i] -> (B, 1, H, W)
                 flow = outputs[("flow", scale)][:, i]
                 mask = outputs[("mask", scale)][:, i]
                 
