@@ -38,6 +38,7 @@ class NewTrainer:
         self.num_input_frames = len(self.opt.frame_ids)
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
 
+        # depth
         self.models["encoder"] = networks.ResnetEncoder(
         self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
@@ -48,18 +49,39 @@ class NewTrainer:
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
         
-        # we use same resnet as depth for flow and pose
-        self.models["pose"] = networks.PoseDecoder(
-            self.models["encoder"].num_ch_enc, self.num_pose_frames, self.num_pose_frames)
 
+        # flow
+        self.models["flow_encoder"] = networks.ResnetEncoder(
+            self.opt.num_layers,
+            self.opt.weights_init == "pretrained",
+            num_input_images=self.num_pose_frames)
         self.models["flow"] = networks.FlowDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales, self.num_pose_frames, self.num_pose_frames)
+            self.models["flow_encoder"].num_ch_enc, 
+            self.opt.scales, 
+            self.num_pose_frames)
 
-        self.models["pose"].to(self.device)
-        self.parameters_to_train += list(self.models["pose"].parameters())
+        self.models["flow_encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["flow_encoder"].parameters())
 
         self.models["flow"].to(self.device)
         self.parameters_to_train += list(self.models["flow"].parameters())
+
+        # pose
+        self.models["pose_encoder"] = networks.ResnetEncoder(
+                self.opt.num_layers,
+                self.opt.weights_init == "pretrained",
+                num_input_images=self.num_pose_frames)
+
+        self.models["pose_encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+
+        self.models["pose"] = networks.PoseDecoder(
+            self.models["pose_encoder"].num_ch_enc,
+            num_input_features=1,
+            num_frames_to_predict_for=2)
+
+        self.models["pose"].to(self.device)
+        self.parameters_to_train += list(self.models["pose"].parameters())
 
         # separate resnet for pose
         # self.models["pose_encoder"] = networks.ResnetEncoder(

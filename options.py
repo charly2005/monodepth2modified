@@ -24,7 +24,7 @@ class MonodepthOptions:
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default= "/projectnb/cs523aw/students/cyao030/tmp")
+                                 default= "/projectnb/cs523aw/projects/kittidataset/tmp")
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -156,7 +156,7 @@ class MonodepthOptions:
         self.parser.add_argument("--log_frequency",
                                  type=int,
                                  help="number of batches between each tensorboard log",
-                                 default=10)
+                                 default=250)
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
