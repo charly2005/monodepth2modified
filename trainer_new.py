@@ -55,6 +55,7 @@ class NewTrainer:
             self.opt.num_layers,
             self.opt.weights_init == "pretrained",
             num_input_images=self.num_pose_frames)
+            
         self.models["flow"] = networks.FlowDecoder(
             self.models["flow_encoder"].num_ch_enc, 
             self.opt.scales, 
@@ -259,7 +260,7 @@ class NewTrainer:
         flow_inputs = torch.cat(
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
 
-        flow_inputs = [self.models["flow_encoder"](flow_inputs)]
+        flow_inputs = self.models["flow_encoder"](flow_inputs)
 
         outputs = self.models["flow"](flow_inputs)
         return outputs

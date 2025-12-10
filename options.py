@@ -87,7 +87,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=16)
+                                 default=48)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -95,7 +95,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=4)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
@@ -150,7 +150,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=str,
                                  help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose"])
+                                 default=["encoder", "depth", "pose_encoder", "pose", "flow", "flow_encoder"])
 
         # LOGGING options
         self.parser.add_argument("--log_frequency",
